@@ -6,8 +6,12 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class Main {
+  // Where all keys and values live. Shared by every client thread.
+  private static final ConcurrentHashMap<String, String> store = new ConcurrentHashMap<>();
+
   public static void main(String[] args) {
     int port = 6379;
     try (ServerSocket serverSocket = new ServerSocket(port)) {
@@ -29,7 +33,7 @@ public class Main {
       OutputStream out = clientSocket.getOutputStream();
 
       while (true) {
-        List<String> command = parseCommand(in);   // e.g. ["ECHO", "hey"]
+        List<String> command = parseCommand(in);   // e.g. ["SET", "foo", "bar"]
         if (command == null) break;                // client disconnected
         if (command.isEmpty()) continue;           // ignore junk input
 
@@ -43,9 +47,9 @@ public class Main {
   }
 
   // ---------- RESP parser ----------
-  // Turns  *2\r\n$4\r\nECHO\r\n$3\r\nhey\r\n  into  ["ECHO", "hey"]
+  // Turns  *3\r\n$3\r\nSET\r\n$3\r\nfoo\r\n$3\r\nbar\r\n  into  ["SET", "foo", "bar"]
   private static List<String> parseCommand(BufferedReader in) throws IOException {
-    String line = in.readLine();               // "*2"  -> array of 2 items
+    String line = in.readLine();               // "*3"  -> array of 3 items
     if (line == null) return null;
     if (!line.startsWith("*")) return List.of();
 
@@ -53,8 +57,8 @@ public class Main {
     List<String> parts = new ArrayList<>();
 
     for (int i = 0; i < count; i++) {
-      String lengthLine = in.readLine();       // "$4"  -> next string is 4 bytes
-      String value = in.readLine();            // "ECHO"
+      String lengthLine = in.readLine();       // "$3"  -> next string is 3 bytes
+      String value = in.readLine();            // "SET"
       if (lengthLine == null || value == null) return null;
       parts.add(value);
     }
@@ -75,14 +79,32 @@ public class Main {
         }
         return bulkString(command.get(1));
 
+      case "SET":
+        // SET key value
+        if (command.size() < 3) {
+          return "-ERR wrong number of arguments for 'set' command\r\n";
+        }
+        store.put(command.get(1), command.get(2));
+        return "+OK\r\n";
+
+      case "GET":
+        // GET key
+        if (command.size() < 2) {
+          return "-ERR wrong number of arguments for 'get' command\r\n";
+        }
+        return bulkString(store.get(command.get(1)));   // null if key doesn't exist
+
       default:
         return "-ERR unknown command '" + command.get(0) + "'\r\n";
     }
   }
 
   // ---------- RESP encoder ----------
-  // "hey"  ->  $3\r\nhey\r\n
+  // "bar" -> $3\r\nbar\r\n     null -> $-1\r\n  (shown as "(nil)" in redis-cli)
   private static String bulkString(String value) {
+    if (value == null) {
+      return "$-1\r\n";
+    }
     return "$" + value.getBytes().length + "\r\n" + value + "\r\n";
   }
 }
