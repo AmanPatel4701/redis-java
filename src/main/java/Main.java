@@ -9,8 +9,16 @@ import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class Main {
-  // Where all keys and values live. Shared by every client thread.
-  private static final ConcurrentHashMap<String, String> store = new ConcurrentHashMap<>();
+
+  // A stored value plus the time it expires (-1 means it never expires)
+  record Entry(String value, long expiresAt) {
+    boolean isExpired() {
+      return expiresAt != -1 && System.currentTimeMillis() >= expiresAt;
+    }
+  }
+
+  // Where all keys live. Shared by every client thread.
+  private static final ConcurrentHashMap<String, Entry> store = new ConcurrentHashMap<>();
 
   public static void main(String[] args) {
     int port = 6379;
@@ -33,7 +41,7 @@ public class Main {
       OutputStream out = clientSocket.getOutputStream();
 
       while (true) {
-        List<String> command = parseCommand(in);   // e.g. ["SET", "foo", "bar"]
+        List<String> command = parseCommand(in);   // e.g. ["SET", "foo", "bar", "PX", "100"]
         if (command == null) break;                // client disconnected
         if (command.isEmpty()) continue;           // ignore junk input
 
@@ -80,23 +88,63 @@ public class Main {
         return bulkString(command.get(1));
 
       case "SET":
-        // SET key value
-        if (command.size() < 3) {
-          return "-ERR wrong number of arguments for 'set' command\r\n";
-        }
-        store.put(command.get(1), command.get(2));
-        return "+OK\r\n";
+        return handleSet(command);
 
       case "GET":
-        // GET key
         if (command.size() < 2) {
           return "-ERR wrong number of arguments for 'get' command\r\n";
         }
-        return bulkString(store.get(command.get(1)));   // null if key doesn't exist
+        return handleGet(command.get(1));
 
       default:
         return "-ERR unknown command '" + command.get(0) + "'\r\n";
     }
+  }
+
+  // SET key value [PX milliseconds | EX seconds]
+  private static String handleSet(List<String> command) {
+    if (command.size() < 3) {
+      return "-ERR wrong number of arguments for 'set' command\r\n";
+    }
+    String key = command.get(1);
+    String value = command.get(2);
+    long expiresAt = -1;   // -1 = never expires
+
+    // Look for an optional PX or EX after the value
+    if (command.size() >= 5) {
+      String option = command.get(3).toUpperCase();
+      long amount;
+      try {
+        amount = Long.parseLong(command.get(4));
+      } catch (NumberFormatException e) {
+        return "-ERR value is not an integer or out of range\r\n";
+      }
+
+      if (option.equals("PX")) {
+        expiresAt = System.currentTimeMillis() + amount;          // milliseconds
+      } else if (option.equals("EX")) {
+        expiresAt = System.currentTimeMillis() + amount * 1000;   // seconds -> ms
+      } else {
+        return "-ERR syntax error\r\n";
+      }
+    }
+
+    store.put(key, new Entry(value, expiresAt));
+    return "+OK\r\n";
+  }
+
+  // GET key -> value, or null if missing or expired
+  private static String handleGet(String key) {
+    Entry entry = store.get(key);
+
+    if (entry == null) {
+      return bulkString(null);
+    }
+    if (entry.isExpired()) {
+      store.remove(key);          // clean up the expired key
+      return bulkString(null);
+    }
+    return bulkString(entry.value());
   }
 
   // ---------- RESP encoder ----------
