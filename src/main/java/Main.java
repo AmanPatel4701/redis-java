@@ -101,6 +101,7 @@ public class Main {
       case "LRANGE":
       case "LLEN":
       case "LPOP":
+      case "BLPOP":
         return ListCommands.handle(command);
         
       default:

@@ -1,65 +1,87 @@
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
+import java.util.HashMap;
 import java.util.List;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.Map;
 
-/** Lists extension: RPUSH, LPUSH, LRANGE, LLEN, LPOP. */
+/** Lists extension: RPUSH, LPUSH, LRANGE, LLEN, LPOP, BLPOP. */
 public class ListCommands {
 
-  // Each key maps to its own list, e.g. "fruits" -> ["apple", "banana"]
-  private static final ConcurrentHashMap<String, List<String>> lists = new ConcurrentHashMap<>();
+  // One lock guards ALL list data. BLPOP waits on it; pushes wake it up.
+  private static final Object lock = new Object();
+
+  // key -> list of elements, e.g. "fruits" -> ["apple", "banana"]
+  private static final Map<String, List<String>> lists = new HashMap<>();
+
+  // key -> clients currently blocked in BLPOP on that key, oldest first
+  private static final Map<String, Deque<Waiter>> waiters = new HashMap<>();
+
+  /** A client blocked in BLPOP, waiting for an element. */
+  private static class Waiter {
+    String value;          // filled in by a push
+    boolean served;        // true once a push handed this waiter an element
+  }
 
   public static String handle(List<String> command) {
     String name = command.get(0).toUpperCase();
     switch (name) {
       case "RPUSH":
-        return rpush(command);
+        return push(command, false);
       case "LPUSH":
-        return lpush(command);
+        return push(command, true);
       case "LRANGE":
         return lrange(command);
       case "LLEN":
         return llen(command);
       case "LPOP":
         return lpop(command);
+      case "BLPOP":
+        return blpop(command);
       default:
         return "-ERR unknown command '" + command.get(0) + "'\r\n";
     }
   }
 
-  // RPUSH key element [element ...]  -> adds to the END, returns the new length
-  private static String rpush(List<String> command) {
+  // RPUSH / LPUSH key element [element ...]  -> returns the new length
+  private static String push(List<String> command, boolean toFront) {
     if (command.size() < 3) {
-      return "-ERR wrong number of arguments for 'rpush' command\r\n";
+      String cmd = toFront ? "lpush" : "rpush";
+      return "-ERR wrong number of arguments for '" + cmd + "' command\r\n";
     }
     String key = command.get(1);
-    List<String> list = lists.computeIfAbsent(key, k -> new ArrayList<>());
 
-    int size;
-    synchronized (list) {                   // only one thread changes this list at a time
+    synchronized (lock) {
+      List<String> list = lists.computeIfAbsent(key, k -> new ArrayList<>());
       for (int i = 2; i < command.size(); i++) {
-        list.add(command.get(i));
+        if (toFront) {
+          list.add(0, command.get(i));      // LPUSH: insert at the front
+        } else {
+          list.add(command.get(i));         // RPUSH: append at the end
+        }
       }
-      size = list.size();
+      int size = list.size();               // length AFTER the push (what Redis returns)
+
+      serveWaiters(key, list);              // hand elements to any blocked BLPOP clients
+      return integer(size);
     }
-    return integer(size);
   }
 
-  // LPUSH key element [element ...]  -> adds to the START, returns the new length
-  private static String lpush(List<String> command) {
-    if (command.size() < 3) {
-      return "-ERR wrong number of arguments for 'lpush' command\r\n";
-    }
-    String key = command.get(1);
-    List<String> list = lists.computeIfAbsent(key, k -> new ArrayList<>());
+  /** Gives elements to blocked clients, oldest first. Must be called while holding the lock. */
+  private static void serveWaiters(String key, List<String> list) {
+    Deque<Waiter> queue = waiters.get(key);
+    if (queue == null) return;
 
-    int size;
-    synchronized (list) {
-      for (int i = 2; i < command.size(); i++) {
-        list.add(0, command.get(i));        // insert at index 0 = the front
-      }
-      size = list.size();
+    boolean anyServed = false;
+    while (!queue.isEmpty() && !list.isEmpty()) {
+      Waiter w = queue.pollFirst();
+      w.value = list.remove(0);
+      w.served = true;
+      anyServed = true;
     }
-    return integer(size);
+    if (queue.isEmpty()) waiters.remove(key);
+    if (list.isEmpty()) lists.remove(key);
+    if (anyServed) lock.notifyAll();        // wake the blocked threads
   }
 
   // LRANGE key start stop  -> elements from start to stop (stop is included)
@@ -76,13 +98,11 @@ public class ListCommands {
       return "-ERR value is not an integer or out of range\r\n";
     }
 
-    List<String> list = lists.get(key);
-    if (list == null) {
-      return array(List.of());              // missing key -> empty array
-    }
-
-    List<String> result;
-    synchronized (list) {
+    synchronized (lock) {
+      List<String> list = lists.get(key);
+      if (list == null) {
+        return array(List.of());            // missing key -> empty array
+      }
       int size = list.size();
 
       // Negative indexes count from the end: -1 = last item, -2 = second last
@@ -96,11 +116,9 @@ public class ListCommands {
       if (start > stop || start >= size) {
         return array(List.of());            // nothing in that range
       }
-
       // subList's end is exclusive, so +1 to include stop
-      result = new ArrayList<>(list.subList(start, stop + 1));
+      return array(new ArrayList<>(list.subList(start, stop + 1)));
     }
-    return array(result);
   }
 
   // LLEN key  -> number of elements (0 if the key doesn't exist)
@@ -108,12 +126,9 @@ public class ListCommands {
     if (command.size() < 2) {
       return "-ERR wrong number of arguments for 'llen' command\r\n";
     }
-    List<String> list = lists.get(command.get(1));
-    if (list == null) {
-      return integer(0);
-    }
-    synchronized (list) {
-      return integer(list.size());
+    synchronized (lock) {
+      List<String> list = lists.get(command.get(1));
+      return integer(list == null ? 0 : list.size());
     }
   }
 
@@ -136,25 +151,88 @@ public class ListCommands {
       }
     }
 
-    List<String> list = lists.get(key);
-    if (list == null) {
-      return Main.bulkString(null);         // missing key -> $-1\r\n
-    }
-
     List<String> removed = new ArrayList<>();
-    synchronized (list) {
+    synchronized (lock) {
+      List<String> list = lists.get(key);
+      if (list == null) {
+        return Main.bulkString(null);       // missing key -> $-1\r\n
+      }
       for (int i = 0; i < count && !list.isEmpty(); i++) {
         removed.add(list.remove(0));        // take from the front
       }
       if (list.isEmpty()) {
-        lists.remove(key, list);            // Redis deletes a list once it's empty
+        lists.remove(key);                  // Redis deletes a list once it's empty
       }
     }
 
     if (hasCount) {
-      return array(removed);                // LPOP key 2 -> array of elements
+      return array(removed);
     }
     return Main.bulkString(removed.isEmpty() ? null : removed.get(0));
+  }
+
+  // BLPOP key timeout
+  //   list has items -> pop immediately, reply [key, element]
+  //   list is empty  -> wait until a push arrives or the timeout runs out
+  //   timeout 0      -> wait forever;  on timeout reply with a null array *-1\r\n
+  private static String blpop(List<String> command) {
+    if (command.size() < 3) {
+      return "-ERR wrong number of arguments for 'blpop' command\r\n";
+    }
+    String key = command.get(1);
+
+    long timeoutMillis;
+    try {
+      double seconds = Double.parseDouble(command.get(2));   // can be a decimal, e.g. 0.5
+      if (seconds < 0) {
+        return "-ERR timeout is negative\r\n";
+      }
+      timeoutMillis = (long) (seconds * 1000);
+    } catch (NumberFormatException e) {
+      return "-ERR timeout is not a float or out of range\r\n";
+    }
+
+    synchronized (lock) {
+      // 1. Something is already there: pop right away
+      List<String> list = lists.get(key);
+      if (list != null && !list.isEmpty()) {
+        String value = list.remove(0);
+        if (list.isEmpty()) lists.remove(key);
+        return array(List.of(key, value));
+      }
+
+      // 2. Nothing there: join the queue for this key and wait
+      Waiter me = new Waiter();
+      waiters.computeIfAbsent(key, k -> new ArrayDeque<>()).addLast(me);
+
+      long deadline = System.currentTimeMillis() + timeoutMillis;
+      try {
+        while (!me.served) {
+          if (timeoutMillis == 0) {
+            lock.wait();                        // wait forever, until a push wakes us
+          } else {
+            long remaining = deadline - System.currentTimeMillis();
+            if (remaining <= 0) break;          // timed out
+            lock.wait(remaining);               // sleep, but no longer than what's left
+          }
+        }
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+      }
+
+      // 3. Either a push served us, or we timed out
+      if (me.served) {
+        return array(List.of(key, me.value));
+      }
+
+      // Timed out: leave the queue so no push tries to serve us later
+      Deque<Waiter> queue = waiters.get(key);
+      if (queue != null) {
+        queue.remove(me);
+        if (queue.isEmpty()) waiters.remove(key);
+      }
+      return "*-1\r\n";                         // null array
+    }
   }
 
   // ---------- RESP helpers ----------
@@ -169,7 +247,7 @@ public class ListCommands {
     StringBuilder sb = new StringBuilder();
     sb.append("*").append(items.size()).append("\r\n");
     for (String item : items) {
-      sb.append(Main.bulkString(item));     // reuses your encoder from Main.java
+      sb.append(Main.bulkString(item));         // reuses your encoder from Main.java
     }
     return sb.toString();
   }
