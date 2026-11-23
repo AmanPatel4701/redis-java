@@ -97,7 +97,9 @@ public class Main {
         return handleGet(command.get(1));
 
       case "RPUSH":
+      case "LPUSH":
       case "LRANGE":
+      case "LLEN":
         return ListCommands.handle(command);
         
       default:

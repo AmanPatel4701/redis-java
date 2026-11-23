@@ -2,7 +2,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
-/** Lists extension: RPUSH, LRANGE. */
+/** Lists extension: RPUSH, LPUSH, LRANGE, LLEN. */
 public class ListCommands {
 
   // Each key maps to its own list, e.g. "fruits" -> ["apple", "banana"]
@@ -13,8 +13,12 @@ public class ListCommands {
     switch (name) {
       case "RPUSH":
         return rpush(command);
+      case "LPUSH":
+        return lpush(command);
       case "LRANGE":
         return lrange(command);
+      case "LLEN":
+        return llen(command);
       default:
         return "-ERR unknown command '" + command.get(0) + "'\r\n";
     }
@@ -29,9 +33,27 @@ public class ListCommands {
     List<String> list = lists.computeIfAbsent(key, k -> new ArrayList<>());
 
     int size;
-    synchronized (list) {
+    synchronized (list) {                   // only one thread changes this list at a time
       for (int i = 2; i < command.size(); i++) {
         list.add(command.get(i));
+      }
+      size = list.size();
+    }
+    return integer(size);
+  }
+
+  // LPUSH key element [element ...]  -> adds to the START, returns the new length
+  private static String lpush(List<String> command) {
+    if (command.size() < 3) {
+      return "-ERR wrong number of arguments for 'lpush' command\r\n";
+    }
+    String key = command.get(1);
+    List<String> list = lists.computeIfAbsent(key, k -> new ArrayList<>());
+
+    int size;
+    synchronized (list) {
+      for (int i = 2; i < command.size(); i++) {
+        list.add(0, command.get(i));        // insert at index 0 = the front
       }
       size = list.size();
     }
@@ -77,6 +99,20 @@ public class ListCommands {
       result = new ArrayList<>(list.subList(start, stop + 1));
     }
     return array(result);
+  }
+
+  // LLEN key  -> number of elements (0 if the key doesn't exist)
+  private static String llen(List<String> command) {
+    if (command.size() < 2) {
+      return "-ERR wrong number of arguments for 'llen' command\r\n";
+    }
+    List<String> list = lists.get(command.get(1));
+    if (list == null) {
+      return integer(0);
+    }
+    synchronized (list) {
+      return integer(list.size());
+    }
   }
 
   // ---------- RESP helpers ----------
