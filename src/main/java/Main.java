@@ -97,6 +97,7 @@ public class Main {
         return handleGet(command.get(1));
 
       case "RPUSH":
+      case "LRANGE":
         return ListCommands.handle(command);
         
       default:
