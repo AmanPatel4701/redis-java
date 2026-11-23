@@ -111,6 +111,12 @@ public class Main {
       case "BLPOP":
         return ListCommands.handle(command);
 
+              // ----- Streams extension (StreamCommands.java) -----
+      case "XADD":
+      case "XRANGE":
+      case "XREAD":
+        return StreamCommands.handle(command);
+        
       default:
         return "-ERR unknown command '" + command.get(0) + "'\r\n";
     }
@@ -170,6 +176,9 @@ public class Main {
     }
     if (ListCommands.hasKey(key)) {
       return "+list\r\n";
+    }
+    if (StreamCommands.hasKey(key)) {
+      return "+stream\r\n";
     }
     return "+none\r\n";
   }
