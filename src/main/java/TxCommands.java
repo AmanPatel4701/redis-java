@@ -40,7 +40,7 @@ public class TxCommands {
 
   // Commands that can wait for a long time. They must not hold execLock,
   // or every other client would be stuck behind them.
-  private static final Set<String> BLOCKING_COMMANDS = Set.of("BLPOP", "XREAD");
+  private static final Set<String> BLOCKING_COMMANDS = Set.of("BLPOP", "XREAD", "WAIT");
 
   // Makes "check watched keys + run the transaction" one uninterruptible step,
   // so no other client can sneak a write in between.
@@ -163,6 +163,7 @@ public class TxCommands {
     String name = command.get(0).toUpperCase();
     if (WRITE_COMMANDS.contains(name) && command.size() >= 2 && !response.startsWith("-")) {
       markModified(command.get(1));          // failed commands don't count as changes
+      Replication.propagate(command);        // copy the write to every replica
     }
     return response;
   }
