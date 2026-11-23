@@ -96,6 +96,9 @@ public class Main {
         }
         return handleGet(command.get(1));
 
+      case "RPUSH":
+        return ListCommands.handle(command);
+        
       default:
         return "-ERR unknown command '" + command.get(0) + "'\r\n";
     }
@@ -149,7 +152,7 @@ public class Main {
 
   // ---------- RESP encoder ----------
   // "bar" -> $3\r\nbar\r\n     null -> $-1\r\n  (shown as "(nil)" in redis-cli)
-  private static String bulkString(String value) {
+  static String bulkString(String value) {
     if (value == null) {
       return "$-1\r\n";
     }
