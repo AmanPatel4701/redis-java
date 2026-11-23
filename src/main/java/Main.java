@@ -17,7 +17,7 @@ public class Main {
     }
   }
 
-  // Where all keys live. Shared by every client thread.
+  // Where all string keys live. Shared by every client thread.
   private static final ConcurrentHashMap<String, Entry> store = new ConcurrentHashMap<>();
 
   public static void main(String[] args) {
@@ -96,6 +96,13 @@ public class Main {
         }
         return handleGet(command.get(1));
 
+      case "TYPE":
+        if (command.size() < 2) {
+          return "-ERR wrong number of arguments for 'type' command\r\n";
+        }
+        return handleType(command.get(1));
+
+      // ----- Lists extension (ListCommands.java) -----
       case "RPUSH":
       case "LPUSH":
       case "LRANGE":
@@ -103,7 +110,7 @@ public class Main {
       case "LPOP":
       case "BLPOP":
         return ListCommands.handle(command);
-        
+
       default:
         return "-ERR unknown command '" + command.get(0) + "'\r\n";
     }
@@ -155,8 +162,21 @@ public class Main {
     return bulkString(entry.value());
   }
 
+  // TYPE key -> string, list, or none (stream gets added with the Streams extension)
+  private static String handleType(String key) {
+    Entry entry = store.get(key);
+    if (entry != null && !entry.isExpired()) {
+      return "+string\r\n";
+    }
+    if (ListCommands.hasKey(key)) {
+      return "+list\r\n";
+    }
+    return "+none\r\n";
+  }
+
   // ---------- RESP encoder ----------
   // "bar" -> $3\r\nbar\r\n     null -> $-1\r\n  (shown as "(nil)" in redis-cli)
+  // Not private, so the extension files can reuse it.
   static String bulkString(String value) {
     if (value == null) {
       return "$-1\r\n";

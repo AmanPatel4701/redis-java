@@ -235,6 +235,15 @@ public class ListCommands {
     }
   }
 
+    /** True if a non-empty list exists for this key. Used by the TYPE command. */
+  public static boolean hasKey(String key) {
+    synchronized (lock) {
+      List<String> list = lists.get(key);
+      return list != null && !list.isEmpty();
+    }
+  }
+
+
   // ---------- RESP helpers ----------
 
   // 3 -> :3\r\n
