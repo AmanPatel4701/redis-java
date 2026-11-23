@@ -34,18 +34,19 @@ public class Main {
     }
   }
 
-  private static void handleClient(Socket clientSocket) {
+    private static void handleClient(Socket clientSocket) {
     try (clientSocket) {
       BufferedReader in = new BufferedReader(
           new InputStreamReader(clientSocket.getInputStream()));
       OutputStream out = clientSocket.getOutputStream();
+      TxCommands.ClientState tx = new TxCommands.ClientState();   // ← NEW: this client's transaction state
 
       while (true) {
-        List<String> command = parseCommand(in);   // e.g. ["SET", "foo", "bar", "PX", "100"]
-        if (command == null) break;                // client disconnected
-        if (command.isEmpty()) continue;           // ignore junk input
+        List<String> command = parseCommand(in);
+        if (command == null) break;
+        if (command.isEmpty()) continue;
 
-        String response = handleCommand(command);
+        String response = TxCommands.process(command, tx);       // ← CHANGED (was handleCommand(command))
         out.write(response.getBytes());
         out.flush();
       }
@@ -74,7 +75,7 @@ public class Main {
   }
 
   // ---------- Commands ----------
-  private static String handleCommand(List<String> command) {
+  static String handleCommand(List<String> command) {
     String name = command.get(0).toUpperCase();   // commands are case-insensitive
 
     switch (name) {
@@ -95,6 +96,12 @@ public class Main {
           return "-ERR wrong number of arguments for 'get' command\r\n";
         }
         return handleGet(command.get(1));
+
+      case "INCR":
+        if (command.size() < 2) {
+          return "-ERR wrong number of arguments for 'incr' command\r\n";
+        }
+        return handleIncr(command.get(1));
 
       case "TYPE":
         if (command.size() < 2) {
@@ -168,6 +175,33 @@ public class Main {
     return bulkString(entry.value());
   }
 
+    // INCR key -> adds 1 to a number stored as a string
+  //   missing key -> becomes 1,  "abc" -> error
+  private static String handleIncr(String key) {
+    final String[] error = {null};
+    final long[] result = {0};
+
+    // compute() does read + update as ONE step, so two clients can't both
+    // read 5 and both write 6
+    store.compute(key, (k, entry) -> {
+      if (entry == null || entry.isExpired()) {
+        result[0] = 1;
+        return new Entry("1", -1);
+      }
+      try {
+        long n = Long.parseLong(entry.value()) + 1;
+        result[0] = n;
+        return new Entry(String.valueOf(n), entry.expiresAt());   // keep the old expiry
+      } catch (NumberFormatException e) {
+        error[0] = "-ERR value is not an integer or out of range\r\n";
+        return entry;                                             // leave the value unchanged
+      }
+    });
+
+    if (error[0] != null) return error[0];
+    return ":" + result[0] + "\r\n";
+  }
+  
   // TYPE key -> string, list, or none (stream gets added with the Streams extension)
   private static String handleType(String key) {
     Entry entry = store.get(key);
