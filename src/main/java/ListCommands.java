@@ -2,7 +2,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
-/** Lists extension: RPUSH, LPUSH, LRANGE, LLEN. */
+/** Lists extension: RPUSH, LPUSH, LRANGE, LLEN, LPOP. */
 public class ListCommands {
 
   // Each key maps to its own list, e.g. "fruits" -> ["apple", "banana"]
@@ -19,6 +19,8 @@ public class ListCommands {
         return lrange(command);
       case "LLEN":
         return llen(command);
+      case "LPOP":
+        return lpop(command);
       default:
         return "-ERR unknown command '" + command.get(0) + "'\r\n";
     }
@@ -115,6 +117,46 @@ public class ListCommands {
     }
   }
 
+  // LPOP key [count]
+  //   no count -> removes the first element, returns it as a bulk string (or null)
+  //   count    -> removes up to count elements, returns them as an array
+  private static String lpop(List<String> command) {
+    if (command.size() < 2) {
+      return "-ERR wrong number of arguments for 'lpop' command\r\n";
+    }
+    String key = command.get(1);
+    boolean hasCount = command.size() >= 3;
+
+    int count = 1;
+    if (hasCount) {
+      try {
+        count = Integer.parseInt(command.get(2));
+      } catch (NumberFormatException e) {
+        return "-ERR value is not an integer or out of range\r\n";
+      }
+    }
+
+    List<String> list = lists.get(key);
+    if (list == null) {
+      return Main.bulkString(null);         // missing key -> $-1\r\n
+    }
+
+    List<String> removed = new ArrayList<>();
+    synchronized (list) {
+      for (int i = 0; i < count && !list.isEmpty(); i++) {
+        removed.add(list.remove(0));        // take from the front
+      }
+      if (list.isEmpty()) {
+        lists.remove(key, list);            // Redis deletes a list once it's empty
+      }
+    }
+
+    if (hasCount) {
+      return array(removed);                // LPOP key 2 -> array of elements
+    }
+    return Main.bulkString(removed.isEmpty() ? null : removed.get(0));
+  }
+
   // ---------- RESP helpers ----------
 
   // 3 -> :3\r\n
@@ -127,7 +169,7 @@ public class ListCommands {
     StringBuilder sb = new StringBuilder();
     sb.append("*").append(items.size()).append("\r\n");
     for (String item : items) {
-      sb.append(Main.bulkString(item));      // reuses your encoder from Main.java
+      sb.append(Main.bulkString(item));     // reuses your encoder from Main.java
     }
     return sb.toString();
   }

@@ -100,6 +100,7 @@ public class Main {
       case "LPUSH":
       case "LRANGE":
       case "LLEN":
+      case "LPOP":
         return ListCommands.handle(command);
         
       default:
