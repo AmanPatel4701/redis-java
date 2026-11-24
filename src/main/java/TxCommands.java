@@ -164,6 +164,7 @@ public class TxCommands {
     if (WRITE_COMMANDS.contains(name) && command.size() >= 2 && !response.startsWith("-")) {
       markModified(command.get(1));          // failed commands don't count as changes
       Replication.propagate(command);        // copy the write to every replica
+      Aof.append(command);                   // save the write to the AOF file
     }
     return response;
   }

@@ -28,6 +28,8 @@ public class Main {
     //   --replicaof "localhost 6379" -> run as a replica of that master
     //   --dir /tmp/redis-files       -> folder of the RDB file
     //   --dbfilename dump.rdb        -> name of the RDB file
+    //   --appendonly yes             -> turn on AOF persistence
+    //   --appenddirname / --appendfilename / --appendfsync -> AOF options
     int port = 6379;
     for (int i = 0; i < args.length - 1; i++) {
       if (args[i].equals("--port")) {
@@ -38,11 +40,22 @@ public class Main {
         Persistence.setDir(args[i + 1]);
       } else if (args[i].equals("--dbfilename")) {
         Persistence.setDbFilename(args[i + 1]);
+      } else if (args[i].equals("--appendonly")) {
+        Aof.setAppendOnly(args[i + 1]);
+      } else if (args[i].equals("--appenddirname")) {
+        Aof.setAppendDirName(args[i + 1]);
+      } else if (args[i].equals("--appendfilename")) {
+        Aof.setAppendFilename(args[i + 1]);
+      } else if (args[i].equals("--appendfsync")) {
+        Aof.setAppendFsync(args[i + 1]);
       }
     }
 
     // Load saved keys from the RDB file (if there is one)
     Persistence.load();
+
+    // AOF: create its directory/files and replay saved commands (only with --appendonly yes)
+    Aof.init();
 
     // A replica connects to its master in the background
     if (Replication.isReplica()) {

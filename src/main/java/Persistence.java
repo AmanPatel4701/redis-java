@@ -27,7 +27,7 @@ public class Persistence {
 
   // ---------- Config ----------
 
-  private static String dir = ".";
+  private static String dir = System.getProperty("user.dir");   // the current directory
   private static String dbFilename = "dump.rdb";
 
   public static void setDir(String value) {
@@ -36,6 +36,10 @@ public class Persistence {
 
   public static void setDbFilename(String value) {
     dbFilename = value;
+  }
+
+  public static String getDir() {
+    return dir;
   }
 
   // ---------- Commands (called from Main.handleCommand) ----------
@@ -65,7 +69,10 @@ public class Persistence {
         value = dbFilename;
         break;
       default:
-        return "*0\r\n";             // unknown parameter -> empty array
+        value = Aof.getConfig(param);  // appendonly, appenddirname, appendfilename, appendfsync
+        if (value == null) {
+          return "*0\r\n";           // unknown parameter -> empty array
+        }
     }
     return "*2\r\n" + Main.bulkString(param) + Main.bulkString(value);
   }
