@@ -68,16 +68,21 @@ public class Aof {
       File aofDir = new File(Persistence.getDir(), appendDirName);
       aofDir.mkdirs();                             // does nothing if it already exists
 
-      // 2. The AOF file: <appendfilename>.1.incr.aof
-      String incrName = appendFilename + ".1.incr.aof";
-      File incrFile = new File(aofDir, incrName);
-
-      // 3. The manifest: lists the AOF file
+      // 2. The manifest says which AOF file to use. If there is one, trust it:
+      //    its file name doesn't have to match <appendfilename>.
       File manifest = new File(aofDir, appendFilename + ".manifest");
-      if (!manifest.exists()) {
+      String incrName = null;
+      if (manifest.exists()) {
+        incrName = incrFileFromManifest(manifest);
+      }
+
+      // 3. No manifest (or no file listed in it): use the default name and write a manifest
+      if (incrName == null) {
+        incrName = appendFilename + ".1.incr.aof";
         String line = "file " + incrName + " seq 1 type i\n";
         Files.writeString(manifest.toPath(), line, StandardCharsets.UTF_8);
       }
+      File incrFile = new File(aofDir, incrName);
 
       // 4. Replay commands from a previous run, if any
       if (incrFile.exists()) {
@@ -90,6 +95,29 @@ public class Aof {
     } catch (IOException e) {
       System.out.println("AOF setup failed: " + e.getMessage());
     }
+  }
+
+  /**
+   * Reads a manifest like
+   *   file strawberry.aof.1.incr.aof seq 1 type i
+   * and returns the name of the incremental ("type i") file, or null if none is listed.
+   */
+  private static String incrFileFromManifest(File manifest) throws IOException {
+    String found = null;
+    for (String line : Files.readAllLines(manifest.toPath(), StandardCharsets.UTF_8)) {
+      String[] tokens = line.trim().split("\\s+");
+      String name = null;
+      String type = null;
+      // Tokens come in pairs: "file <name>", "seq <n>", "type <t>"
+      for (int i = 0; i + 1 < tokens.length; i += 2) {
+        if (tokens[i].equals("file")) name = tokens[i + 1];
+        if (tokens[i].equals("type")) type = tokens[i + 1];
+      }
+      if (name != null && "i".equals(type)) {
+        found = name;                              // if there are several, the last one is the newest
+      }
+    }
+    return found;
   }
 
   /** Runs every command saved in the AOF file, in order, to rebuild the data. */
