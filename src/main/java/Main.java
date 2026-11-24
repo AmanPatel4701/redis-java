@@ -191,6 +191,15 @@ public class Main {
       case "WAIT":
         return Replication.handle(command);
 
+      // ----- Sorted Sets extension (ZSetCommands.java) -----
+      case "ZADD":
+      case "ZRANK":
+      case "ZRANGE":
+      case "ZCARD":
+      case "ZSCORE":
+      case "ZREM":
+        return ZSetCommands.handle(command);
+
       // ----- Pub/Sub extension (PubSub.java) -----
       case "PUBLISH":
         return PubSub.publish(command);
@@ -309,7 +318,7 @@ public class Main {
     store.put(key, new Entry(value, expiresAt));
   }
 
-  // TYPE key -> string, list, stream, or none
+  // TYPE key -> string, list, stream, zset, or none
   private static String handleType(String key) {
     Entry entry = store.get(key);
     if (entry != null && !entry.isExpired()) {
@@ -320,6 +329,9 @@ public class Main {
     }
     if (StreamCommands.hasKey(key)) {
       return "+stream\r\n";
+    }
+    if (ZSetCommands.hasKey(key)) {
+      return "+zset\r\n";
     }
     return "+none\r\n";
   }

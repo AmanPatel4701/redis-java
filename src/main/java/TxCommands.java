@@ -36,7 +36,7 @@ public class TxCommands {
 
   // Commands that change the key in command.get(1)
   private static final Set<String> WRITE_COMMANDS = Set.of(
-      "SET", "INCR", "RPUSH", "LPUSH", "LPOP", "BLPOP", "XADD");
+      "SET", "INCR", "RPUSH", "LPUSH", "LPOP", "BLPOP", "XADD", "ZADD", "ZREM");
 
   // Commands that can wait for a long time. They must not hold execLock,
   // or every other client would be stuck behind them.
