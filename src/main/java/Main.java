@@ -76,11 +76,13 @@ public class Main {
 
   private static void handleClient(Socket clientSocket) {
     Replication.ReplicaLink link = null;     // set if this connection turns out to be a replica
+    PubSub.ClientSub sub = null;
 
     try (clientSocket) {
       RespReader in = new RespReader(clientSocket.getInputStream());
       OutputStream out = clientSocket.getOutputStream();
       TxCommands.ClientState tx = new TxCommands.ClientState();
+      sub = new PubSub.ClientSub(out);       // this client's pub/sub state
 
       while (true) {
         List<String> command = in.readCommand();   // e.g. ["SET", "foo", "bar"]
@@ -104,7 +106,11 @@ public class Main {
           continue;
         }
 
-        String response = TxCommands.process(command, tx);
+        // SUBSCRIBE / UNSUBSCRIBE, and the rules of subscribed mode
+        String response = PubSub.process(command, sub);
+        if (response == null) {
+          response = TxCommands.process(command, tx);   // everything else
+        }
         synchronized (out) {               // propagation may also write to this socket
           out.write(response.getBytes(StandardCharsets.UTF_8));
           out.flush();
@@ -115,6 +121,9 @@ public class Main {
     } finally {
       if (link != null) {
         Replication.removeReplica(link);
+      }
+      if (sub != null) {
+        PubSub.disconnect(sub);              // stop sending messages to a closed connection
       }
     }
   }
@@ -181,6 +190,10 @@ public class Main {
       case "REPLCONF":
       case "WAIT":
         return Replication.handle(command);
+
+      // ----- Pub/Sub extension (PubSub.java) -----
+      case "PUBLISH":
+        return PubSub.publish(command);
 
       // ----- RDB Persistence extension (Persistence.java) -----
       case "CONFIG":
