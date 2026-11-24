@@ -26,14 +26,23 @@ public class Main {
     // ----- Start-up options -----
     //   --port 6380                  -> listen on another port
     //   --replicaof "localhost 6379" -> run as a replica of that master
+    //   --dir /tmp/redis-files       -> folder of the RDB file
+    //   --dbfilename dump.rdb        -> name of the RDB file
     int port = 6379;
     for (int i = 0; i < args.length - 1; i++) {
       if (args[i].equals("--port")) {
         port = Integer.parseInt(args[i + 1]);
       } else if (args[i].equals("--replicaof")) {
         Replication.setReplicaOf(args[i + 1]);
+      } else if (args[i].equals("--dir")) {
+        Persistence.setDir(args[i + 1]);
+      } else if (args[i].equals("--dbfilename")) {
+        Persistence.setDbFilename(args[i + 1]);
       }
     }
+
+    // Load saved keys from the RDB file (if there is one)
+    Persistence.load();
 
     // A replica connects to its master in the background
     if (Replication.isReplica()) {
@@ -127,6 +136,12 @@ public class Main {
         }
         return handleIncr(command.get(1));
 
+      case "KEYS":
+        if (command.size() < 2) {
+          return "-ERR wrong number of arguments for 'keys' command\r\n";
+        }
+        return handleKeys(command.get(1));
+
       case "TYPE":
         if (command.size() < 2) {
           return "-ERR wrong number of arguments for 'type' command\r\n";
@@ -153,6 +168,10 @@ public class Main {
       case "REPLCONF":
       case "WAIT":
         return Replication.handle(command);
+
+      // ----- RDB Persistence extension (Persistence.java) -----
+      case "CONFIG":
+        return Persistence.handle(command);
 
       default:
         return "-ERR unknown command '" + command.get(0) + "'\r\n";
@@ -228,6 +247,40 @@ public class Main {
 
     if (error[0] != null) return error[0];
     return ":" + result[0] + "\r\n";
+  }
+
+  // KEYS pattern -> every (non-expired) string key that matches, e.g. KEYS * or KEYS user:*
+  private static String handleKeys(String pattern) {
+    // Turn the glob pattern into a regex: * = anything, ? = one character
+    StringBuilder regex = new StringBuilder();
+    for (char c : pattern.toCharArray()) {
+      if (c == '*') regex.append(".*");
+      else if (c == '?') regex.append(".");
+      else regex.append(java.util.regex.Pattern.quote(String.valueOf(c)));
+    }
+    String compiled = regex.toString();
+
+    List<String> keys = new ArrayList<>();
+    for (var e : store.entrySet()) {
+      if (!e.getValue().isExpired() && e.getKey().matches(compiled)) {
+        keys.add(e.getKey());
+      }
+    }
+
+    StringBuilder sb = new StringBuilder();
+    sb.append("*").append(keys.size()).append("\r\n");
+    for (String k : keys) {
+      sb.append(bulkString(k));
+    }
+    return sb.toString();
+  }
+
+  /** Called by Persistence while loading the RDB file. Keys that already expired are skipped. */
+  static void loadKey(String key, String value, long expiresAt) {
+    if (expiresAt != -1 && System.currentTimeMillis() >= expiresAt) {
+      return;
+    }
+    store.put(key, new Entry(value, expiresAt));
   }
 
   // TYPE key -> string, list, stream, or none
