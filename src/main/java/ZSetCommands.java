@@ -67,6 +67,43 @@ public class ZSetCommands {
     }
   }
 
+  // ---------- Helpers for GeoCommands (geo locations are stored in sorted sets) ----------
+
+  /** Adds or updates one member. Returns true if it was new. */
+  public static boolean addMember(String key, double score, String member) {
+    synchronized (lock) {
+      SortedSet set = sets.computeIfAbsent(key, k -> new SortedSet());
+      Double old = set.scores.put(member, score);
+      if (old != null) {
+        set.ordered.remove(new Member(old, member));
+      }
+      set.ordered.add(new Member(score, member));
+      return old == null;
+    }
+  }
+
+  /** A member's score, or null if the key or member doesn't exist. */
+  public static Double scoreOf(String key, String member) {
+    synchronized (lock) {
+      SortedSet set = sets.get(key);
+      return set == null ? null : set.scores.get(member);
+    }
+  }
+
+  /** A copy of every member and its score, in sorted order. */
+  public static Map<String, Double> allMembers(String key) {
+    synchronized (lock) {
+      Map<String, Double> result = new java.util.LinkedHashMap<>();
+      SortedSet set = sets.get(key);
+      if (set != null) {
+        for (Member m : set.ordered) {
+          result.put(m.name(), m.score());
+        }
+      }
+      return result;
+    }
+  }
+
   // ---------- ZADD ----------
 
   // ZADD key score member [score member ...]

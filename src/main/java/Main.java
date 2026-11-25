@@ -204,6 +204,13 @@ public class Main {
       case "BITOP":
         return BitmapCommands.handle(command);
 
+      // ----- Geospatial extension (GeoCommands.java) -----
+      case "GEOADD":
+      case "GEOPOS":
+      case "GEODIST":
+      case "GEOSEARCH":
+        return GeoCommands.handle(command);
+
       // ----- Sorted Sets extension (ZSetCommands.java) -----
       case "ZADD":
       case "ZRANK":
