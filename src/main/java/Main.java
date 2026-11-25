@@ -152,6 +152,12 @@ public class Main {
         }
         return handleGet(command.get(1));
 
+      case "STRLEN":
+        if (command.size() < 2) {
+          return "-ERR wrong number of arguments for 'strlen' command\r\n";
+        }
+        return handleStrlen(command.get(1));
+
       case "INCR":
         if (command.size() < 2) {
           return "-ERR wrong number of arguments for 'incr' command\r\n";
@@ -262,6 +268,21 @@ public class Main {
       return bulkString(null);
     }
     return bulkString(entry.value());
+  }
+
+  // STRLEN key -> length of the string in bytes (0 if the key doesn't exist)
+  private static String handleStrlen(String key) {
+    String value = getString(key);
+    if (value == null) {
+      return ":0\r\n";
+    }
+    // Bitmap strings use one char per byte (all chars 0-255): their length is the byte count.
+    // Normal text may contain other characters, so count its UTF-8 bytes instead.
+    boolean oneBytePerChar = value.chars().allMatch(c -> c <= 0xFF);
+    int length = oneBytePerChar
+        ? value.length()
+        : value.getBytes(StandardCharsets.UTF_8).length;
+    return ":" + length + "\r\n";
   }
 
   // INCR key -> adds 1 to a number stored as a string
