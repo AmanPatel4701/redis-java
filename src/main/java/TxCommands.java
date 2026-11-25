@@ -36,7 +36,8 @@ public class TxCommands {
 
   // Commands that change the key in command.get(1)
   private static final Set<String> WRITE_COMMANDS = Set.of(
-      "SET", "INCR", "RPUSH", "LPUSH", "LPOP", "BLPOP", "XADD", "ZADD", "ZREM");
+      "SET", "INCR", "RPUSH", "LPUSH", "LPOP", "BLPOP", "XADD", "ZADD", "ZREM",
+      "SETBIT", "BITOP");
 
   // Commands that can wait for a long time. They must not hold execLock,
   // or every other client would be stuck behind them.
@@ -162,7 +163,9 @@ public class TxCommands {
     String response = Main.handleCommand(command);
     String name = command.get(0).toUpperCase();
     if (WRITE_COMMANDS.contains(name) && command.size() >= 2 && !response.startsWith("-")) {
-      markModified(command.get(1));          // failed commands don't count as changes
+      // BITOP writes to command.get(2) (BITOP AND destkey ...); every other write uses get(1)
+      String key = (name.equals("BITOP") && command.size() >= 3) ? command.get(2) : command.get(1);
+      markModified(key);                     // failed commands don't count as changes
       Replication.propagate(command);        // copy the write to every replica
       Aof.append(command);                   // save the write to the AOF file
     }

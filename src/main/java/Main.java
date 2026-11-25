@@ -191,6 +191,13 @@ public class Main {
       case "WAIT":
         return Replication.handle(command);
 
+      // ----- Bitmaps extension (BitmapCommands.java) -----
+      case "SETBIT":
+      case "GETBIT":
+      case "BITCOUNT":
+      case "BITOP":
+        return BitmapCommands.handle(command);
+
       // ----- Sorted Sets extension (ZSetCommands.java) -----
       case "ZADD":
       case "ZRANK":
@@ -308,6 +315,35 @@ public class Main {
       sb.append(bulkString(k));
     }
     return sb.toString();
+  }
+
+  // ---------- String store access for BitmapCommands ----------
+  // Bitmaps are stored as normal strings, so BitmapCommands reads and writes them here.
+
+  /** The string value of a key, or null if it's missing or expired. */
+  static String getString(String key) {
+    Entry entry = store.get(key);
+    if (entry == null || entry.isExpired()) {
+      return null;
+    }
+    return entry.value();
+  }
+
+  /** Stores a new value but keeps the key's expiry (SETBIT doesn't change the TTL). */
+  static void setStringKeepTtl(String key, String value) {
+    store.compute(key, (k, old) -> {
+      long expiresAt = (old == null || old.isExpired()) ? -1 : old.expiresAt();
+      return new Entry(value, expiresAt);
+    });
+  }
+
+  /** Stores a value with no expiry. */
+  static void setString(String key, String value) {
+    store.put(key, new Entry(value, -1));
+  }
+
+  static void deleteString(String key) {
+    store.remove(key);
   }
 
   /** Called by Persistence while loading the RDB file. Keys that already expired are skipped. */
