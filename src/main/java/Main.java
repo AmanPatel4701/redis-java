@@ -83,6 +83,7 @@ public class Main {
       OutputStream out = clientSocket.getOutputStream();
       TxCommands.ClientState tx = new TxCommands.ClientState();
       sub = new PubSub.ClientSub(out);       // this client's pub/sub state
+      Auth.ClientAuth auth = Auth.newClient();   // logged in already, unless "default" has a password
 
       while (true) {
         List<String> command = in.readCommand();   // e.g. ["SET", "foo", "bar"]
@@ -106,8 +107,13 @@ public class Main {
           continue;
         }
 
+        // AUTH / ACL, and NOAUTH for clients that haven't logged in
+        String response = Auth.process(command, auth);
+
         // SUBSCRIBE / UNSUBSCRIBE, and the rules of subscribed mode
-        String response = PubSub.process(command, sub);
+        if (response == null) {
+          response = PubSub.process(command, sub);
+        }
         if (response == null) {
           response = TxCommands.process(command, tx);   // everything else
         }
